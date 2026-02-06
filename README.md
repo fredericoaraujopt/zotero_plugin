@@ -2,7 +2,6 @@
 
 A Google Apps Script plugin that keeps your Zotero library in sync with Google Sheets. It imports your Zotero references into a Sheets reading list, where you can keep detailed notes on what you are reading, and lets you export those notes back to Zotero.
 
-[upload file]  
 [link to tutorial]
 
 ## Installation
