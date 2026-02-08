@@ -91,7 +91,7 @@ This will:
 
 If you changed core bibliographic fields (Paper/Authors/Year/url), you will be prompted to confirm export.
 
-![Alt text](src/zoteroplugin_5.png)
+<img src="src/zoteroplugin_5.png" alt="Alt text" width="400">
 
 ---
 
@@ -106,7 +106,7 @@ This will:
 
 Next time you export from Sheets back to Zotero, the script will tidy organisation by consolidating previously imported notes (tag/marker-based) into the main note.
 
-![Alt text](src/zoteroplugin_6.png)
+<img src="src/zoteroplugin_6.png" alt="Alt text" width="400">
 
 ---
 
