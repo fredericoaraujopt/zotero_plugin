@@ -46,6 +46,8 @@ https://docs.google.com/spreadsheets/d/1JCRg0zxq62RRdxQ6xEfoExcsUBwBxrjyh8dmBHv5
 4. Save.
 5. Go back to Google Sheets and reload the page. You should see a new menu called **Zotero**. The first time you run a command, Google will prompt you to approve Apps Script permissions.
 
+![Alt text](src/zoteroplugin_3.png)
+
 ---
 
 ## User manual
@@ -63,6 +65,8 @@ The importer fills these columns:
 - **Authors**
 - **Year**
 - **Theme**: derived from Zotero tags
+
+![Alt text](src/zoteroplugin_4.png)
 
 ---
 
@@ -85,7 +89,9 @@ This will:
 - Update Zotero tags (Theme tags + Status tag + `reading list`)
 - Export your Sheet Notes into Zotero. This note will have the header **“Imported from Google Sheets”**.
 
-If you changed core bibliographic fields (Paper/Authors/Year), you may see a confirmation warning before export.
+If you changed core bibliographic fields (Paper/Authors/Year/url), you will be prompted to confirm export.
+
+![Alt text](src/zoteroplugin_5.png)
 
 ---
 
@@ -100,13 +106,15 @@ This will:
 
 Next time you export from Sheets back to Zotero, the script will tidy organisation by consolidating previously imported notes (tag/marker-based) into the main note.
 
+![Alt text](src/zoteroplugin_6.png)
+
 ---
 
 ## Notes & behaviour
 
 - Imports from Zotero won’t overwrite "Status" or "Notes" columns. New notes from Zotero are appended to the end of Notes in Sheets.
-- If you edit core bibliographic fields (Paper/Authors/Year/URL), you will be prompted to confirm export.
-- **Theme options** are refreshed from Zotero tags at the start of import.You can customise the colour/appearance of Theme tags in Google Sheets via:
+- If you remove a reference in Sheets (e.g. delete row) and then export changes back to Zotero, the `reading list` tag will be removed from that reference.
+- **Theme options** are refreshed from Zotero tags at the start of import. You can customise the colour/appearance of Theme tags in Google Sheets via:
   **Data → Data validation rules** (e.g. the rule affecting the Theme column range such as `D3:D`).
 
 ---
