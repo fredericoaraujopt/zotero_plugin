@@ -4,6 +4,8 @@ A Google Apps Script plugin that keeps your Zotero library in sync with Google S
 
 [link to tutorial]
 
+![Alt text](src/zoteroplugin_1.png)
+
 ## Installation
 
 ### 1) Download the Google Sheets template
@@ -13,6 +15,8 @@ https://docs.google.com/spreadsheets/d/1JCRg0zxq62RRdxQ6xEfoExcsUBwBxrjyh8dmBHv5
 3.	In your copy, check that the script is present:
     -	Go to Extensions → Apps Script
     -	If you can’t see the code there, copy the contents of the repository’s .gs file into Code.gs, then Save.
+
+![Alt text](src/zoteroplugin_2.png)
 
 ### 2) Obtain a Zotero API key and User ID
 1. Navigate to www.zotero.org (web version — not the desktop app).
