@@ -32,6 +32,8 @@ function onOpen() {
     .addSeparator()
     //.addItem("Import Zotero tags", "refreshThemeOptionsFromZotero")
     .addItem("Import new Zotero notes", "importNewZoteroNotes")
+    .addSeparator()
+    .addItem("Help", "showZoteroHelp")
     .addToUi();
 }
 
@@ -1440,4 +1442,183 @@ function escapeHtml_(s) {
 
 function ensureHashColumnHidden_(sheet, colHash) {
   try { sheet.hideColumns(colHash); } catch (e) {}
+}
+
+/* -------------------- User Guide -------------------- */
+
+function showZoteroHelp() {
+  const html = HtmlService.createHtmlOutput(`
+  <html>
+    <head>
+      <base target="_top">
+      <style>
+        :root{
+          --font: 16px;           /* <-- bump this */
+          --fontSmall: 14px;
+        }
+        body{
+          font-family: Arial, sans-serif;
+          margin: 0;
+          font-size: var(--font);
+          color: #111;
+        }
+        .wrap{ padding: 16px 18px 18px 18px; }
+        h2{ margin: 0 0 12px 0; font-size: 20px; }
+        .hint{ color:#444; font-size: var(--fontSmall); margin-bottom: 12px; }
+
+        /* Accordion */
+        details{
+          border: 1px solid #ddd;
+          border-radius: 10px;
+          padding: 10px 12px;
+          margin: 10px 0;
+          background: #fff;
+        }
+        summary{
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 16px;
+          list-style: none;
+          outline: none;
+        }
+        /* Remove default disclosure triangle (Chrome) and add our own */
+        summary::-webkit-details-marker { display:none; }
+        summary::before{
+          content: "▸";
+          display: inline-block;
+          width: 18px;
+          color: #333;
+        }
+        details[open] summary::before{ content: "▾"; }
+
+        .section{ margin-top: 10px; }
+        h3{ margin: 12px 0 6px 0; font-size: 16px; }
+        p{ margin: 6px 0; line-height: 1.4; }
+        li{ margin: 6px 0; }
+        code{
+          background: #f3f3f3;
+          padding: 2px 6px;
+          border-radius: 6px;
+          font-size: 0.95em;
+        }
+        .note{
+          margin-top: 10px;
+          background: #fff8e1;
+          border: 1px solid #ffe08a;
+          padding: 10px 12px;
+          border-radius: 10px;
+        }
+        .small{ font-size: var(--fontSmall); color:#555; }
+        .footer{
+          margin-top: 14px;
+          padding-top: 10px;
+          border-top: 1px solid #eee;
+          font-size: var(--fontSmall);
+          color:#444;
+        }
+      </style>
+    </head>
+
+    <body>
+      <div class="wrap">
+        <h2>Zotero ↔ Google Sheets Plugin — Help</h2>
+
+        <details open>
+          <summary>1) Setting up</summary>
+          <div class="section">
+            <ol>
+              <li>
+                Get your Zotero credentials:
+                <ul>
+                  <li><b>API key</b>: <a href="https://www.zotero.org" target="_blank" rel="noopener">www.zotero.org</a> → <b>Settings</b> → <b>Security</b> → <b>Create new private key</b></li> → <b>Allow library, notes, and write access</b>
+                  <li><b>Library ID</b>: Zotero web → <b>Settings</b> → <b>Security</b> (shown as your <b>User ID</b>)</li>
+                </ul>
+              </li>
+              <li>Open <b>Extensions → Apps Script</b>.</li>
+              <li>Set Script Properties:
+                <ul>
+                  <li><code>ZOTERO_LIBRARY_ID</code></li>
+                  <li><code>ZOTERO_API_KEY</code></li>
+                  <li><code>ZOTERO_INCLUDE_NOTES</code> <code>true</code></li>
+                  <li><code>ZOTERO_LIBRARY_TYPE</code> <code>user</code></li>
+                </ul>
+              </li>
+              <li>Reload the spreadsheet so the <b>Zotero</b> menu appears.</li>
+            </ol>
+          </div>
+        </details>
+
+        <details>
+          <summary>2) Import reading list from Zotero</summary>
+          <div class="section">
+            <ol>
+              <li>In Zotero, tag references you want to import with <b><code>reading list</code></b>.</li>
+              <li>Run <b>Zotero → Import reading list from Zotero</b> when you want to import your references into Sheets.</li>
+            </ol>
+            <p>This will:</p>
+            <ul>
+              <li>Pull all items tagged <code>reading list</code></li>
+              <li>Fill: <b>Paper</b> (hyperlinked), <b>Authors</b>, <b>Year</b>, <b>Theme</b> (from Zotero tags)<b>, Notes</b></li>
+            </ul>
+          </div>
+        </details>
+
+        <details>
+          <summary>3) Export changes to Zotero</summary>
+          <div class="section">
+            <p>Run <b>Zotero → Export changes to Zotero</b> when you want Sheets edits reflected in Zotero.</p>
+            <p>This will:</p>
+            <ul>
+              <li>Update Zotero title, URL (including hyperlink deletions), and tags (Theme + Status)</li>
+              <li>Export your Sheet Notes into Zotero as a note headed <b>“Imported from Google Sheets”</b></li>
+              <li>Remove <code>reading list</code> in Zotero for references you deleted from the Sheet (snapshot-based)</li>
+            </ul>
+            <div class="note">
+              <b>Note:</b> If you edit core bibliographic fields (Paper/Authors/Year), you will be prompted to confirm export.
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>4) Import new Zotero notes</summary>
+          <div class="section">
+            <p>Run <b>Zotero → Import new Zotero notes</b> if you created notes directly in Zotero and want them in Sheets.</p>
+            <ul>
+              <li>Scans notes under each <code>reading list</code> item</li>
+              <li>Appends new notes to the <b>Notes</b> cell in Sheets</li>
+              <li>Marks imported notes in Zotero so they won’t be appended again</li>
+            </ul>
+          </div>
+        </details>
+
+        <details>
+          <summary>5) Usage notes & troubleshooting</summary>
+          <div class="section">
+            <h3>Usage notes</h3>
+            <ul>
+              <li>Use Sheets as your dashboard: update <b>Status</b> and keep <b>Notes</b> here.</li>
+              <li>Imports won’t overwrite Status/Notes.</li>
+              <li>Theme dropdown options refresh from Zotero tags at import.</li>
+              <li>You can adjust Theme styling via <b>Data → Data validation rules</b>.</li>
+            </ul>
+
+            <h3>Troubleshooting</h3>
+            <ul>
+              <li><b>Menu missing:</b> reload the spreadsheet.</li>
+              <li><b>Config error:</b> confirm Script Properties exist: <code>ZOTERO_LIBRARY_ID</code>, <code>ZOTERO_API_KEY</code>.</li>
+              <li><b>Hyperlinks broken:</b> ensure URLs include <code>https://</code>.</li>
+              <li><b>Group library:</b> endpoints must use <code>/groups/&lt;id&gt;/...</code>.</li>
+            </ul>
+
+            <div class="footer">
+              Questions / feedback: <b>frdfaa2@cam.ac.uk</b>
+            </div>
+          </div>
+        </details>
+      </div>
+    </body>
+  </html>
+  `).setWidth(760).setHeight(650);
+
+  SpreadsheetApp.getUi().showModalDialog(html, "Zotero Plugin Help");
 }
