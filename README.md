@@ -104,11 +104,9 @@ Next time you export from Sheets back to Zotero, the script will tidy organisati
 
 ## Notes & behaviour
 
-- **Status + Notes are “Sheet-owned”**: imports from Zotero won’t overwrite them. New notes from Zotero are appended to the end of Notes in Sheets.
-- **Paper hyperlink is “Sheet-aware”**:
-  - Export can update the Zotero URL from edits you make to the Paper hyperlink (including deletion).
-- **Theme options** are refreshed from Zotero tags at the start of import.  
-  You can customise the colour/appearance of Theme tags in Google Sheets via:
+- Imports from Zotero won’t overwrite "Status" or "Notes" columns. New notes from Zotero are appended to the end of Notes in Sheets.
+- If you edit core bibliographic fields (Paper/Authors/Year/URL), you will be prompted to confirm export.
+- **Theme options** are refreshed from Zotero tags at the start of import.You can customise the colour/appearance of Theme tags in Google Sheets via:
   **Data → Data validation rules** (e.g. the rule affecting the Theme column range such as `D3:D`).
 
 ---
