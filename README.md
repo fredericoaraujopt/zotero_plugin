@@ -35,6 +35,9 @@ https://docs.google.com/spreadsheets/d/1JCRg0zxq62RRdxQ6xEfoExcsUBwBxrjyh8dmBHv5
 ---
 
 ### 3) Insert your Zotero credentials into Google Apps Script
+
+<img src="src/zoteroplugin_3.png" alt="Alt text" width="650">
+
 1. In Google Sheets, go to **Extensions → Apps Script**.
 2. Open **Project Settings → Script Properties** and add the following:
 
@@ -45,14 +48,13 @@ https://docs.google.com/spreadsheets/d/1JCRg0zxq62RRdxQ6xEfoExcsUBwBxrjyh8dmBHv5
 
 4. Save.
 5. Go back to Google Sheets and reload the page. You should see a new menu called **Zotero**. The first time you run a command, Google will prompt you to approve Apps Script permissions.
-
-<img src="src/zoteroplugin_3.png" alt="Alt text" width="650">
-
 ---
 
 ## User manual
 
 ### 5) Import the reading list into Google Sheets
+<img src="src/zoteroplugin_4.png" alt="Alt text" width="400">
+
 1. In Zotero, tag all references you want to import with the tag **`reading list`**. The script uses this tag to determine what should appear in the Google Sheet.
 2. In Google Sheets, use the menu: **Zotero → Import reading list from Zotero**.
 
@@ -65,8 +67,6 @@ The importer fills these columns:
 - **Authors**
 - **Year**
 - **Theme**: derived from Zotero tags
-
-<img src="src/zoteroplugin_4.png" alt="Alt text" width="400">
 
 ---
 
@@ -81,6 +81,8 @@ Imports will not overwrite your Status or Notes. Sheets is intended to be your m
 ---
 
 ### 8) Export your Sheet updates back to Zotero
+<img src="src/zoteroplugin_5.png" alt="Alt text" width="400">
+
 When you have made changes in Google Sheets and want them reflected in Zotero:
 - Use **Zotero → Export changes to Zotero**
 
@@ -91,11 +93,12 @@ This will:
 
 If you changed core bibliographic fields (Paper/Authors/Year/url), you will be prompted to confirm export.
 
-<img src="src/zoteroplugin_5.png" alt="Alt text" width="400">
-
 ---
 
 ### 9) Import new Zotero notes into Sheets (append-only)
+
+<img src="src/zoteroplugin_6.png" alt="Alt text" width="400">
+
 If you added notes directly in Zotero and want them reflected in Sheets (so your Sheet has all notes up to date):
 - Use **Zotero → Import new Zotero notes**
 
@@ -105,8 +108,6 @@ This will:
 - Mark imported notes in Zotero so they are not appended again
 
 Next time you export from Sheets back to Zotero, the script will tidy organisation by consolidating previously imported notes (tag/marker-based) into the main note.
-
-<img src="src/zoteroplugin_6.png" alt="Alt text" width="400">
 
 ---
 
