@@ -46,7 +46,7 @@ https://docs.google.com/spreadsheets/d/1JCRg0zxq62RRdxQ6xEfoExcsUBwBxrjyh8dmBHv5
 4. Save.
 5. Go back to Google Sheets and reload the page. You should see a new menu called **Zotero**. The first time you run a command, Google will prompt you to approve Apps Script permissions.
 
-![Alt text](src/zoteroplugin_3.png)
+<img src="src/zoteroplugin_3.png" alt="Alt text" width="250">
 
 ---
 
