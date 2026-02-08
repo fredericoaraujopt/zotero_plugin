@@ -66,7 +66,7 @@ The importer fills these columns:
 - **Year**
 - **Theme**: derived from Zotero tags
 
-![Alt text](src/zoteroplugin_4.png)
+<img src="src/zoteroplugin_4.png" alt="Alt text" width="500">
 
 ---
 
