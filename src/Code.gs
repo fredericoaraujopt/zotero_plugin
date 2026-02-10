@@ -12,6 +12,11 @@ const PRIORITY_TAG = "Priority"
 const NOT_STARTED_TAG = "Not started"
 const NOT_FINISHED_TAG = "Not finished"
 const PAGE_SIZE = 100;
+const SNAPSHOT_PROP_KEY = "ZOTERO_READING_LIST_SNAPSHOT_V1";
+
+// Legacy internal note tags (kept only for migration cleanup; never write them again).
+const LEGACY_TAG_IMPORTED_TO_SHEETS = "imported_to_sheets";
+const LEGACY_TAG_SHEETS_ORIGIN = "origin_sheets";
 
 // Column indices (1-based)
 const COL_PAPER = 1;   // A
@@ -57,42 +62,13 @@ function importReadingList() {
   ensureLinkUrlColumnHidden_(sheet, t.colLinkUrl);
   ensureThemeOptionsSheet_();
 
-  ui.alert("Zotero full sync started. This will refresh the entire reading list.");
+  ui.alert(
+    "Zotero full sync started. This will refresh the entire reading list."
+  );
 
   // ---------- Helpers (local, so this function is self-consistent) ----------
   function getCellString_(r, c) {
     return (sheet.getRange(r, c).getValue() || "").toString();
-  }
-
-  function firstWord_(s) {
-    const t = (s || "").toString().trim();
-    if (!t) return "untitled";
-    return t.split(/\s+/)[0].replace(/[^\p{L}\p{N}_-]+/gu, "") || "untitled";
-  }
-
-  function firstAuthorLastName_(authorsStr) {
-    // Your Authors are formatted like: "Last, First; Last2, First2" OR "Name"
-    const a = (authorsStr || "").toString().trim();
-    if (!a) return "noauthor";
-    const first = a.split(";")[0].trim();
-    if (!first) return "noauthor";
-    // If "Last, First" => last name is before comma; else take last token
-    if (first.includes(",")) {
-      return first.split(",")[0].trim().replace(/[^\p{L}\p{N}_-]+/gu, "") || "noauthor";
-    }
-    const parts = first.split(/\s+/).filter(Boolean);
-    const last = parts.length ? parts[parts.length - 1] : "noauthor";
-    return last.replace(/[^\p{L}\p{N}_-]+/gu, "") || "noauthor";
-  }
-
-  function year4_(y) {
-    const s = (y || "").toString().trim();
-    const m = s.match(/\b(18|19|20|21)\d{2}\b/);
-    return m ? m[0] : (s || "noyear");
-  }
-
-  function makeLabel_(title, authorsStr, yearStr) {
-    return `${firstWord_(title)}_${firstAuthorLastName_(authorsStr)}_${year4_(yearStr)}`;
   }
 
   function sheetRowSnapshot_(r) {
@@ -213,7 +189,13 @@ function importReadingList() {
 
     const tags = (item.data.tags || [])
       .map(x => (x.tag || "").trim())
-      .filter(x => x && x.toLowerCase() !== READING_LIST_TAG && !STATUS_TAGS_SET.has(x.toLowerCase()));
+      .filter(x => {
+        if (!x) return false;
+        const lower = x.toLowerCase();
+        return lower !== READING_LIST_TAG &&
+          !STATUS_TAGS_SET.has(lower) &&
+          !isInternalZoteroTag_(lower);
+      });
 
     const uniqueTags = [...new Set(tags)].sort((a, b) => a.localeCompare(b));
     allThemesToAdd.push(...uniqueTags);
@@ -235,7 +217,6 @@ function importReadingList() {
   }
 
   // -------------------- (2) Compare incoming Zotero vs CURRENT sheet hash --------------------
-  let updated = 0;
   const updatedRowNumbers = [];
   const changeLines = [];
 
@@ -254,11 +235,12 @@ function importReadingList() {
 
     const before = sheetRowSnapshot_(r);
     const diffs = diffColumns_(before, z);
-    if (diffs.length) changeLines.push(prettyDiffLine_(r, diffs));
+    if (diffs.length) {
+      changeLines.push(prettyDiffLine_(r, diffs));
+    }
 
     applyZoteroToRowPreservingStatusNotes_(r, z);
 
-    updated++;
     updatedRowNumbers.push(r);
   }
 
@@ -271,8 +253,9 @@ function importReadingList() {
   // -----------------------------------------------------------------------------------------
 
   // -------------------- Append NEW rows --------------------
-  let appended = 0;
-  const addedLabels = []; // NEW
+  const addedLabels = [];
+  const addedWithImportedNotes = [];
+  const addedWithNoteImportErrors = [];
   let appendAt = t.appendRow;
 
   for (const [key, z] of zoteroRows.entries()) {
@@ -292,17 +275,32 @@ function importReadingList() {
 
     if (t.colLinkUrl) sheet.getRange(appendAt, t.colLinkUrl).setValue(zLink);
 
-    const finalHash = rowFingerprint_(z.title || "", z.authors || "", z.year || "", z.themeValue || "", "", "", zLink);
+    if (cfg.includeNotes) {
+      try {
+        const notesCell = sheet.getRange(appendAt, t.colNotes);
+        const stats = appendNewZoteroNotesToSheetInline_(cfg, key, notesCell, {
+          includeSheetsOriginAsContent: true
+        });
+        if (stats.appended > 0) {
+          addedWithImportedNotes.push(makeReferenceLabel_(z.title, z.authors, z.year));
+        }
+      } catch (e) {
+        const label = makeReferenceLabel_(z.title, z.authors, z.year);
+        addedWithNoteImportErrors.push(label);
+        Logger.log(`WARNING: Failed importing notes on initial row import for ${label} (${key}). Error: ${e}`);
+      }
+    }
+
+    const notesFinal = (sheet.getRange(appendAt, t.colNotes).getValue() || "").toString();
+    const finalHash = rowFingerprint_(z.title || "", z.authors || "", z.year || "", z.themeValue || "", "", notesFinal, zLink);
     sheet.getRange(appendAt, t.colHash).setValue(finalHash);
 
-    appended++;
-    addedLabels.push(makeLabel_(z.title, z.authors, z.year)); // NEW
+    addedLabels.push(makeReferenceLabel_(z.title, z.authors, z.year));
     appendAt++;
   }
   // --------------------------------------------
 
   // -------------------- Delete rows not in Zotero reading list --------------------
-  let deleted = 0;
   const deletedLabels = []; // NEW
 
   const lastRowAfterAppends = sheet.getLastRow();
@@ -329,34 +327,30 @@ function importReadingList() {
       if (!k) continue;
       if (!zoteroRows.has(k)) {
         rowsToDelete.push(dataStart + i);
-        deletedLabels.push(makeLabel_(titleVals[i], authorVals[i], yearVals[i])); // NEW
+        deletedLabels.push(makeReferenceLabel_(titleVals[i], authorVals[i], yearVals[i]));
       }
     }
 
     rowsToDelete.sort((a, b) => b - a);
     for (const r of rowsToDelete) {
       sheet.deleteRow(r);
-      deleted++;
     }
   }
   // -------------------------------------------------------------------------------
 
-  // Final UI alert (now includes added/deleted labels)
+  // Snapshot after import so export can detect references later deleted from Sheets.
+  saveReadingListSnapshot_(buildSnapshotFromZoteroRows_(zoteroRows));
+
   updatedRowNumbers.sort((a, b) => a - b);
-  const updatedStr = updatedRowNumbers.length ? updatedRowNumbers.join(", ") : "None";
-
-  const maxLabels = 25;
-  const addedShown = addedLabels.slice(0, maxLabels);
-  const deletedShown = deletedLabels.slice(0, maxLabels);
-
-  const addedMore = addedLabels.length > maxLabels ? `, …(+${addedLabels.length - maxLabels} more)` : "";
-  const deletedMore = deletedLabels.length > maxLabels ? `, …(+${deletedLabels.length - maxLabels} more)` : "";
 
   ui.alert(
     "Import complete.\n" +
-    `Updated row(s): ${updatedStr}\n` +
-    `References added: ${addedLabels.length ? addedShown.join(", ") + addedMore : "None"}\n` +
-    `References deleted: ${deletedLabels.length ? deletedShown.join(", ") + deletedMore : "None"}`
+    `Updated row(s): ${updatedRowNumbers.length ? updatedRowNumbers.join(", ") : "None"}\n` +
+    `References added: ${formatReferenceList_(addedLabels)}\n` +
+    `References removed: ${formatReferenceList_(deletedLabels)}` +
+    (cfg.includeNotes && addedWithNoteImportErrors.length
+      ? `\nIssues: note import failed for ${formatReferenceList_(addedWithNoteImportErrors)}`
+      : "")
   );
 }
 
@@ -412,38 +406,38 @@ function importNewZoteroNotes() {
 
   const numRows = lastRow - t.dataStartRow + 1;
 
-  // Read keys + notes in one go
+  // Read keys + notes + label fields in one go
   const keyVals = sheet.getRange(t.dataStartRow, t.colKey, numRows, 1).getValues();
+  const paperVals = sheet.getRange(t.dataStartRow, t.colPaper, numRows, 1).getValues();
+  const authorVals = sheet.getRange(t.dataStartRow, t.colAuthors, numRows, 1).getValues();
+  const yearVals = sheet.getRange(t.dataStartRow, t.colYear, numRows, 1).getValues();
   const notesRange = sheet.getRange(t.dataStartRow, t.colNotes, numRows, 1);
-  const notesVals = notesRange.getValues(); // used only for logging/optional filters
 
   let appendedSnippets = 0;
-  let skippedAlreadyImported = 0;
-  let processed = 0;
+  let processedItems = 0;
 
-  const changedRows = [];
-  const skippedRows = [];
+  const changedRefs = [];
+  const skippedRefs = [];
 
-  ui.alert("Apppending new Zotero notes. This may take a moment.");
+  ui.alert("Appending new Zotero notes. This may take a moment.");
 
   for (let i = 0; i < numRows; i++) {
     const key = (keyVals[i][0] || "").toString().trim();
     if (!key) continue;
 
-    // Optional speed filter: skip rows with very long notes or rows you don't want touched
-    // const existingNotes = (notesVals[i][0] || "").toString();
-    // if (existingNotes.length > 5000) continue;
-
     const notesCell = notesRange.getCell(i + 1, 1);
     const stats = appendNewZoteroNotesToSheetInline_(cfg, key, notesCell);
+    const refLabel = makeReferenceLabel_(
+      (paperVals[i][0] || "").toString(),
+      (authorVals[i][0] || "").toString(),
+      (yearVals[i][0] || "").toString()
+    );
 
     appendedSnippets += stats.appended;
-    skippedAlreadyImported += stats.skippedImported;
-    processed++;
+    processedItems++;
 
-    const rowNumber = t.dataStartRow + i;
-    if (stats.appended > 0) changedRows.push(rowNumber);
-    else skippedRows.push(rowNumber);
+    if (stats.appended > 0) changedRefs.push(refLabel);
+    else skippedRefs.push(refLabel);
 
     if (stats.appended === 0 && stats.skippedImported > 0) {
       Logger.log(`Item ${key}: notes exist but were already imported earlier (skipped ${stats.skippedImported}).`);
@@ -454,8 +448,10 @@ function importNewZoteroNotes() {
 
   ui.alert(
     "Notes import complete.\n" +
-    `Changed rows: ${changedRows.length ? changedRows.join(", ") : "None"}\n` +
-    `Skipped rows: ${skippedRows.length ? skippedRows.join(", ") : "None"}`
+    `Processed references: ${processedItems}\n` +
+    `Imported note snippets: ${appendedSnippets}\n` +
+    `References changed: ${formatReferenceList_(changedRefs)}\n` +
+    `References unchanged: ${formatReferenceList_(skippedRefs)}`
   );
 }
 
@@ -675,9 +671,7 @@ function clearTitleHyperlink_(cell, title) {
 
 const NOTE_MARK_SHEETS_ORIGIN = "<!--ZSHEET:ORIGIN=SHEETS-->";
 const NOTE_MARK_IMPORTED = "<!--ZSHEET:IMPORTED_TO_SHEETS-->";
-
-const TAG_IMPORTED_TO_SHEETS = "imported_to_sheets";
-const TAG_SHEETS_ORIGIN = "origin_sheets"; // optional, but useful
+const SHEET_NOTE_HEADER = "Imported from Google Sheets";
 
 function hasMarker_(html, marker) {
   return (html || "").toString().includes(marker);
@@ -686,6 +680,20 @@ function hasMarker_(html, marker) {
 function addMarkerIfMissing_(html, marker) {
   const s = (html || "").toString();
   return hasMarker_(s, marker) ? s : (s + "\n" + marker);
+}
+
+function isInternalZoteroTag_(tag) {
+  const t = (tag || "").toString().trim().toLowerCase();
+  return t === LEGACY_TAG_IMPORTED_TO_SHEETS || t === LEGACY_TAG_SHEETS_ORIGIN;
+}
+
+function stripInternalNoteTags_(tagsField) {
+  const before = (tagsField || []).map(x => (x?.tag || "").toString().trim()).filter(Boolean);
+  const after = before.filter(tag => !isInternalZoteroTag_(tag));
+  return {
+    changed: before.length !== after.length,
+    tags: after.map(tag => ({ tag }))
+  };
 }
 
 // Inline append to keep the cell short: "existing; new; new2"
@@ -697,13 +705,42 @@ function appendInlineText_(existing, addition) {
   return `${a}; ${b}`;
 }
 
-function appendNewZoteroNotesToSheetInline_(cfg, parentKey, notesCell) {
+function escapeRegex_(s) {
+  return (s || "").toString().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasSheetsOriginHeaderPrefix_(html) {
+  const plain = htmlToPlainText_(html).replace(/\s+/g, " ").trim();
+  const re = new RegExp(`^${escapeRegex_(SHEET_NOTE_HEADER)}\\b`, "i");
+  return re.test(plain);
+}
+
+function plainFromSheetsOriginHtml_(html) {
+  const raw = (html || "").toString();
+  const header = escapeRegex_(SHEET_NOTE_HEADER);
+
+  // Remove known marker and header paragraph in HTML form first.
+  const withoutHeaderHtml = raw
+    .replace(/<!--\s*ZSHEET:ORIGIN=SHEETS\s*-->/gi, "")
+    .replace(
+      new RegExp(`<p[^>]*>\\s*(?:<strong[^>]*>)?\\s*${header}\\s*(?:<\\/strong>)?\\s*<\\/p>`, "i"),
+      ""
+    );
+
+  // Then remove any remaining leading plain-text header variant.
+  let plain = htmlToPlainText_(withoutHeaderHtml).replace(/\s+/g, " ").trim();
+  plain = plain.replace(new RegExp(`^${header}\\s*[:\\-–—]?\\s*`, "i"), "").trim();
+  return plain;
+}
+
+function appendNewZoteroNotesToSheetInline_(cfg, parentKey, notesCell, options) {
+  const includeSheetsOriginAsContent = !!(options && options.includeSheetsOriginAsContent);
   const url = buildItemChildrenUrl_(cfg, parentKey, { itemType: "note", limit: 100 });
   const children = zoteroFetch_(cfg, url);
   const notes = Array.isArray(children) ? children : [];
 
   const toAppendPlain = [];
-  const notesToMark = [];
+  const notesToUpdate = [];
 
   let skippedImported = 0;
   let skippedOrigin = 0;
@@ -711,35 +748,97 @@ function appendNewZoteroNotesToSheetInline_(cfg, parentKey, notesCell) {
 
   for (const n of notes) {
     const html = (n?.data?.note || "").toString();
+    const tags = n?.data?.tags || [];
 
-    if (hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN)) { skippedOrigin++; continue; }
-    if (hasMarker_(html, NOTE_MARK_IMPORTED)) { skippedImported++; continue; }
+    const hasOriginMarker = hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN);
+    const hasImportedMarker = hasMarker_(html, NOTE_MARK_IMPORTED);
+    const hasLegacyOriginTag = hasTag_(tags, LEGACY_TAG_SHEETS_ORIGIN);
+    const hasLegacyImportedTag = hasTag_(tags, LEGACY_TAG_IMPORTED_TO_SHEETS);
+    const cleanedTags = stripInternalNoteTags_(tags);
+
+    let migratedHtml = html;
+    if (hasLegacyOriginTag && !hasOriginMarker) {
+      migratedHtml = addMarkerIfMissing_(migratedHtml, NOTE_MARK_SHEETS_ORIGIN);
+    }
+    if (hasLegacyImportedTag && !hasImportedMarker) {
+      migratedHtml = addMarkerIfMissing_(migratedHtml, NOTE_MARK_IMPORTED);
+    }
+
+    const hasOriginHeaderPrefix = hasSheetsOriginHeaderPrefix_(migratedHtml);
+    if (hasOriginHeaderPrefix && !hasOriginMarker) {
+      migratedHtml = addMarkerIfMissing_(migratedHtml, NOTE_MARK_SHEETS_ORIGIN);
+    }
+
+    const isOrigin = hasOriginMarker || hasLegacyOriginTag || hasOriginHeaderPrefix;
+    const isImported = hasImportedMarker || hasLegacyImportedTag;
+
+    if (isOrigin) {
+      if (includeSheetsOriginAsContent) {
+        const plain = plainFromSheetsOriginHtml_(migratedHtml);
+        if (plain) toAppendPlain.push(plain);
+        else emptyNotes++;
+      } else {
+        skippedOrigin++;
+      }
+      if (migratedHtml !== html || cleanedTags.changed) {
+        notesToUpdate.push({
+          key: n.key,
+          version: n.version,
+          data: n.data,
+          note: migratedHtml,
+          tags: cleanedTags.tags
+        });
+      }
+      continue;
+    }
+
+    if (isImported) {
+      skippedImported++;
+      if (migratedHtml !== html || cleanedTags.changed) {
+        notesToUpdate.push({
+          key: n.key,
+          version: n.version,
+          data: n.data,
+          note: migratedHtml,
+          tags: cleanedTags.tags
+        });
+      }
+      continue;
+    }
 
     const plain = htmlToPlainText_(html).replace(/\s+/g, " ").trim();
     if (!plain) { emptyNotes++; continue; }
 
     toAppendPlain.push(plain);
-    notesToMark.push({ key: n.key, version: n.version, data: n.data });
+    notesToUpdate.push({
+      key: n.key,
+      version: n.version,
+      data: n.data,
+      note: addMarkerIfMissing_(migratedHtml, NOTE_MARK_IMPORTED),
+      tags: cleanedTags.tags
+    });
   }
 
   if (toAppendPlain.length) {
     const existing = (notesCell.getValue() || "").toString();
     const chunk = toAppendPlain.join("; ");
     notesCell.setValue(appendInlineText_(existing, chunk));
+  }
 
-    try {
-      for (const m of notesToMark) {
+  if (notesToUpdate.length) {
+    for (const m of notesToUpdate) {
+      try {
         const updated = { ...m.data };
-        updated.note = addMarkerIfMissing_(updated.note, NOTE_MARK_IMPORTED);
-        updated.tags = ensureTags_(updated.tags, [TAG_IMPORTED_TO_SHEETS]); // ✅ add tag
+        updated.note = m.note;
+        updated.tags = m.tags;
         updated.version = m.version;
         zoteroPutItemData_(cfg, m.key, updated);
+      } catch (e) {
+        Logger.log(
+          `WARNING: Failed to update note markers for parent ${parentKey}, note ${m.key}. ` +
+          `Error: ${e}`
+        );
       }
-    } catch (e) {
-      Logger.log(
-        `WARNING: Failed to mark imported notes for parent ${parentKey}. ` +
-        `They may re-append next sync. Error: ${e}`
-      );
     }
   }
 
@@ -750,13 +849,6 @@ function appendNewZoteroNotesToSheetInline_(cfg, parentKey, notesCell) {
     emptyNotes,
     totalChildNotes: notes.length
   };
-}
-
-function ensureTags_(tagsField, tagsToAdd) {
-  const existing = (tagsField || []).map(t => (t && t.tag ? t.tag.toString() : "").trim()).filter(Boolean);
-  const set = new Set(existing);
-  for (const t of (tagsToAdd || [])) set.add(t);
-  return Array.from(set).map(tag => ({ tag }));
 }
 
 function hasTag_(tagsField, tag) {
@@ -856,6 +948,143 @@ function formatCreators_(creators) {
 function parseYear_(dateStr) {
   const m = String(dateStr || "").match(/\b(18|19|20|21)\d{2}\b/);
   return m ? m[0] : "";
+}
+
+function sanitizeLabelToken_(value, fallback) {
+  const token = (value || "").toString().trim().replace(/[^\p{L}\p{N}_-]+/gu, "");
+  return token || fallback;
+}
+
+function firstMeaningfulWordOver3_(title) {
+  const words = (title || "").toString().trim()
+    .split(/\s+/)
+    .map(w => sanitizeLabelToken_(w, ""))
+    .filter(Boolean);
+
+  if (!words.length) return "untitled";
+  return words.find(w => w.length > 3) || words[0];
+}
+
+function firstAuthorLastNameForLabel_(authorsStr) {
+  const a = (authorsStr || "").toString().trim();
+  if (!a) return "noauthor";
+
+  const first = a.split(";")[0].trim();
+  if (!first) return "noauthor";
+
+  if (first.includes(",")) {
+    return sanitizeLabelToken_(first.split(",")[0], "noauthor");
+  }
+
+  const parts = first.split(/\s+/).filter(Boolean);
+  return sanitizeLabelToken_(parts.length ? parts[parts.length - 1] : "", "noauthor");
+}
+
+function yearForLabel_(value) {
+  const s = (value || "").toString().trim();
+  const m = s.match(/\b(18|19|20|21)\d{2}\b/);
+  return m ? m[0] : "noyear";
+}
+
+function makeReferenceLabel_(title, authorsStr, yearStr) {
+  return `${firstMeaningfulWordOver3_(title)}_${firstAuthorLastNameForLabel_(authorsStr)}_${yearForLabel_(yearStr)}`;
+}
+
+function formatReferenceList_(labels, maxItems) {
+  const max = maxItems || 25;
+  const deduped = [];
+  const seen = new Set();
+
+  for (const raw of (labels || [])) {
+    const label = (raw || "").toString().trim();
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    deduped.push(label);
+  }
+
+  if (!deduped.length) return "None";
+  const shown = deduped.slice(0, max);
+  const more = deduped.length > max ? `, ...(+${deduped.length - max} more)` : "";
+  return shown.join(", ") + more;
+}
+
+function buildSnapshotFromZoteroRows_(zoteroRows) {
+  const byKey = {};
+  for (const [key, z] of zoteroRows.entries()) {
+    if (!key) continue;
+    const title = (z?.title || "").toString();
+    const authors = (z?.authors || "").toString();
+    const year = (z?.year || "").toString();
+    byKey[key] = {
+      label: makeReferenceLabel_(title, authors, year),
+      title,
+      authors,
+      year
+    };
+  }
+  return byKey;
+}
+
+function buildSnapshotFromSheet_(sheet, t) {
+  const byKey = {};
+  const lastRow = sheet.getLastRow();
+  if (lastRow < t.dataStartRow) return byKey;
+
+  const numRows = lastRow - t.dataStartRow + 1;
+  const keys = sheet.getRange(t.dataStartRow, t.colKey, numRows, 1).getValues();
+  const papers = sheet.getRange(t.dataStartRow, t.colPaper, numRows, 1).getValues();
+  const authors = sheet.getRange(t.dataStartRow, t.colAuthors, numRows, 1).getValues();
+  const years = sheet.getRange(t.dataStartRow, t.colYear, numRows, 1).getValues();
+
+  for (let i = 0; i < numRows; i++) {
+    const key = (keys[i][0] || "").toString().trim();
+    if (!key) continue;
+
+    const title = (papers[i][0] || "").toString();
+    const author = (authors[i][0] || "").toString();
+    const year = (years[i][0] || "").toString();
+
+    byKey[key] = {
+      label: makeReferenceLabel_(title, author, year),
+      title,
+      authors: author,
+      year
+    };
+  }
+
+  return byKey;
+}
+
+function saveReadingListSnapshot_(byKey) {
+  const props = getSnapshotPropertiesStore_();
+  const payload = {
+    savedAt: new Date().toISOString(),
+    byKey: byKey || {}
+  };
+  props.setProperty(SNAPSHOT_PROP_KEY, JSON.stringify(payload));
+}
+
+function loadReadingListSnapshot_() {
+  const props = getSnapshotPropertiesStore_();
+  const raw = props.getProperty(SNAPSHOT_PROP_KEY);
+  if (!raw) return { exists: false, savedAt: "", byKey: {} };
+
+  try {
+    const parsed = JSON.parse(raw);
+    const byKey = (parsed && typeof parsed.byKey === "object" && parsed.byKey) ? parsed.byKey : {};
+    return {
+      exists: true,
+      savedAt: (parsed?.savedAt || "").toString(),
+      byKey
+    };
+  } catch (e) {
+    Logger.log(`WARNING: invalid ${SNAPSHOT_PROP_KEY}; resetting snapshot.`);
+    return { exists: false, savedAt: "", byKey: {} };
+  }
+}
+
+function getSnapshotPropertiesStore_() {
+  return PropertiesService.getDocumentProperties() || PropertiesService.getScriptProperties();
 }
 
 function pickTheme_(tags) {
@@ -1019,7 +1248,9 @@ function refreshThemeOptionsFromZotero(showAlerts) {
 
   const cleaned = tags.filter(t => {
     const tl = t.toLowerCase();
-    return tl !== READING_LIST_TAG && !STATUS_TAGS_SET.has(tl);
+    return tl !== READING_LIST_TAG &&
+      !STATUS_TAGS_SET.has(tl) &&
+      !isInternalZoteroTag_(tl);
   });
 
   cleaned.sort((a, b) => a.localeCompare(b));
@@ -1089,35 +1320,26 @@ function pushSheetEditsToZotero() {
   const cfg = getConfig_();
   const t = getTableInfo_(sheet);
 
-  let changed = 0;
-  let unchanged = 0;
-  let skippedNoKey = 0;
-  let conflicted = 0;
-  let failed = 0;
-
   const changedRows = [];
-  const conflictRows = [];
-  const failedRows = [];
+  const conflictRefs = [];
+  const failedRefs = [];
 
   const lastRow = sheet.getLastRow();
-  if (lastRow < t.dataStartRow) {
-    ui.alert("No rows to push.");
-    return;
-  }
+  const numRows = Math.max(0, lastRow - t.dataStartRow + 1);
 
-  const numRows = lastRow - t.dataStartRow + 1;
+  const keys = numRows > 0
+    ? sheet.getRange(t.dataStartRow, t.colKey, numRows, 1).getValues().map(r => (r[0] || "").toString().trim())
+    : [];
+  const hashes = numRows > 0
+    ? sheet.getRange(t.dataStartRow, t.colHash, numRows, 1).getValues().map(r => (r[0] || "").toString())
+    : [];
 
-  // Batch read keys + full hashes
-  const keys = sheet.getRange(t.dataStartRow, t.colKey, numRows, 1)
-    .getValues()
-    .map(r => (r[0] || "").toString().trim());
-
-  const hashes = sheet.getRange(t.dataStartRow, t.colHash, numRows, 1)
-    .getValues()
-    .map(r => (r[0] || "").toString());
+  const baselineSnapshot = loadReadingListSnapshot_();
+  const currentSnapshot = buildSnapshotFromSheet_(sheet, t);
+  let deletionNote = "";
 
   // -------- WARNING ONLY FOR Paper/Authors/Year --------
-  const rowsWithCoreChanges = [];
+  const refsWithCoreChanges = [];
   for (let i = 0; i < numRows; i++) {
     const rowNumber = t.dataStartRow + i;
     const itemKey = keys[i];
@@ -1135,13 +1357,15 @@ function pushSheetEditsToZotero() {
       continue;
     }
 
-    if (lastCore !== currentCore) rowsWithCoreChanges.push(rowNumber);
+    if (lastCore !== currentCore) {
+      refsWithCoreChanges.push(makeReferenceLabel_(snap.paper, snap.authors, snap.year));
+    }
   }
 
-  if (rowsWithCoreChanges.length) {
+  if (refsWithCoreChanges.length) {
     const resp = ui.alert(
       "Export to Zotero",
-      `Changes detected in Paper/Authors/Year for row(s): ${rowsWithCoreChanges.join(", ")}.\n` +
+      `Changes detected in Paper/Authors/Year for reference(s): ${formatReferenceList_(refsWithCoreChanges, 12)}.\n` +
       "Continue exporting to Zotero?",
       ui.ButtonSet.YES_NO
     );
@@ -1152,13 +1376,13 @@ function pushSheetEditsToZotero() {
   for (let i = 0; i < numRows; i++) {
     const rowNumber = t.dataStartRow + i;
     const itemKey = keys[i];
-    if (!itemKey) { skippedNoKey++; continue; }
+    if (!itemKey) continue;
 
     const snap = getSheetRowSnapshot_(sheet, rowNumber, t);
     const lastHash = hashes[i];
 
     // Full-row hash gating (so Notes/Status edits still push notes/tag changes)
-    if (lastHash && lastHash === snap.hash) { unchanged++; continue; }
+    if (lastHash && lastHash === snap.hash) continue;
 
     try {
       const itemObj = zoteroGetItem_(cfg, itemKey);
@@ -1187,8 +1411,8 @@ function pushSheetEditsToZotero() {
 
       const statusTag = (snap.status || "").toString().trim();
 
-      const tagsOut = new Set(themeTags);
-      if (statusTag) tagsOut.add(statusTag);
+      const tagsOut = new Set(themeTags.filter(tag => !isInternalZoteroTag_(tag)));
+      if (statusTag && !isInternalZoteroTag_(statusTag)) tagsOut.add(statusTag);
       tagsOut.add(READING_LIST_TAG);
 
       data.tags = Array.from(tagsOut).map(tag => ({ tag }));
@@ -1206,29 +1430,88 @@ function pushSheetEditsToZotero() {
       const hashCell = sheet.getRange(rowNumber, t.colHash);
       setCoreHashCheckpoint_(hashCell, coreFingerprint_(snap.paper, snap.authors, snap.year));
 
-      changed++;
       changedRows.push(rowNumber);
 
     } catch (e) {
       const msg = (e && e.message) ? e.message : String(e);
+      const rowLabel = makeReferenceLabel_(snap.paper, snap.authors, snap.year);
 
       if (msg.includes("Zotero API error 412")) {
-        conflicted++;
-        conflictRows.push(rowNumber);
+        conflictRefs.push(rowLabel);
         sheet.getRange(rowNumber, t.colStatus).setValue("CONFLICT (Zotero updated elsewhere)");
       } else {
-        failed++;
-        failedRows.push(rowNumber);
+        failedRefs.push(rowLabel);
         sheet.getRange(rowNumber, t.colStatus).setValue("PUSH FAILED");
       }
     }
   }
 
+  const removedFromReadingList = [];
+  const removeReadingListFailed = [];
+  const failedDeletedKeys = [];
+
+  if (!baselineSnapshot.exists) {
+    deletionNote = "Deletion check skipped (no baseline snapshot found). A baseline was created now.";
+  } else {
+    const deletedKeys = Object.keys(baselineSnapshot.byKey).filter(key => !currentSnapshot[key]);
+
+    for (const key of deletedKeys) {
+      const ref = baselineSnapshot.byKey[key] || {};
+      const label = (ref.label || key).toString();
+
+      try {
+        const result = removeReadingListTagFromItem_(cfg, key);
+        if (result.removed) removedFromReadingList.push(label);
+      } catch (e) {
+        removeReadingListFailed.push(label);
+        failedDeletedKeys.push(key);
+        Logger.log(`WARNING: Failed removing "${READING_LIST_TAG}" for deleted sheet item ${key}. Error: ${e}`);
+      }
+    }
+  }
+
+  const snapshotToSave = { ...currentSnapshot };
+  if (baselineSnapshot.exists) {
+    for (const key of failedDeletedKeys) {
+      snapshotToSave[key] = baselineSnapshot.byKey[key] || { label: key, title: "", authors: "", year: "" };
+    }
+  }
+  saveReadingListSnapshot_(snapshotToSave);
+
+  changedRows.sort((a, b) => a - b);
+  const issueParts = [];
+  if (conflictRefs.length) issueParts.push(`conflicts: ${formatReferenceList_(conflictRefs)}`);
+  if (failedRefs.length) issueParts.push(`push failures: ${formatReferenceList_(failedRefs)}`);
+  if (removeReadingListFailed.length) issueParts.push(`reading-list removal failures: ${formatReferenceList_(removeReadingListFailed)}`);
+  if (deletionNote) issueParts.push(deletionNote);
+
   ui.alert(
     "Export to Zotero complete.\n" +
-    `Changed row(s): ${changedRows.length ? changedRows.join(", ") : "None"}\n` +
-    `Conflict row(s): ${conflictRows.length ? conflictRows.join(", ") : "None"}`
+    `Updated row(s): ${changedRows.length ? changedRows.join(", ") : "None"}\n` +
+    `Removed from reading list: ${formatReferenceList_(removedFromReadingList)}\n` +
+    `Issues: ${issueParts.length ? issueParts.join(" | ") : "None"}`
   );
+}
+
+function removeReadingListTagFromItem_(cfg, itemKey) {
+  const itemObj = zoteroGetItem_(cfg, itemKey);
+  const data = itemObj.data || {};
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+
+  const filtered = tags.filter(t => {
+    const tag = (t?.tag || "").toString().trim().toLowerCase();
+    return tag !== READING_LIST_TAG;
+  });
+
+  if (filtered.length === tags.length) return { removed: false };
+
+  data.tags = filtered
+    .map(t => ({ tag: (t?.tag || "").toString().trim() }))
+    .filter(t => !!t.tag);
+  data.version = itemObj.version;
+
+  zoteroPutItemData_(cfg, itemKey, data);
+  return { removed: true };
 }
 
 function coreFingerprint_(paper, authors, year) {
@@ -1344,8 +1627,6 @@ function zoteroFetchRaw_(cfg, url, method) {
   return { code, text };
 }
 
-const SHEET_NOTE_HEADER = "Imported from Google Sheets"; // visible header in Zotero
-
 function buildSheetOriginNoteHtml_(plainText) {
   const escaped = escapeHtml_((plainText || "").toString().trim());
   return `<div>
@@ -1360,17 +1641,18 @@ function upsertSheetNotesChild_(cfg, parentKey, plainText) {
   const children = zoteroFetch_(cfg, childrenUrl);
   const notes = Array.isArray(children) ? children : [];
 
-  // Delete notes previously imported to Sheets (tag-based), but never delete the Sheets-origin note
+  // Delete notes previously imported to Sheets, but never delete the Sheets-origin note.
+  // Supports marker-based logic and legacy internal tags.
   let deletedImportedNotes = 0;
 
   for (const n of notes) {
     const html = (n?.data?.note || "").toString();
     const tags = n?.data?.tags || [];
 
-    const isSheetsOrigin = hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN) || hasTag_(tags, TAG_SHEETS_ORIGIN);
+    const isSheetsOrigin = hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN) || hasTag_(tags, LEGACY_TAG_SHEETS_ORIGIN);
     if (isSheetsOrigin) continue;
 
-    const isImportedToSheets = hasTag_(tags, TAG_IMPORTED_TO_SHEETS) || hasMarker_(html, NOTE_MARK_IMPORTED);
+    const isImportedToSheets = hasTag_(tags, LEGACY_TAG_IMPORTED_TO_SHEETS) || hasMarker_(html, NOTE_MARK_IMPORTED);
     if (!isImportedToSheets) continue;
 
     try {
@@ -1381,11 +1663,12 @@ function upsertSheetNotesChild_(cfg, parentKey, plainText) {
     }
   }
 
-  // Find existing Sheets-origin note by marker
+  // Find existing Sheets-origin note by marker (or legacy internal tag)
   let target = null;
   for (const n of notes) {
     const html = (n?.data?.note || "").toString();
-    if (hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN)) {
+    const tags = n?.data?.tags || [];
+    if (hasMarker_(html, NOTE_MARK_SHEETS_ORIGIN) || hasTag_(tags, LEGACY_TAG_SHEETS_ORIGIN)) {
       target = n;
       break;
     }
@@ -1395,8 +1678,8 @@ function upsertSheetNotesChild_(cfg, parentKey, plainText) {
 
   if (target) {
     const noteData = { ...target.data };
+    noteData.tags = stripInternalNoteTags_(noteData.tags).tags;
     noteData.note = htmlNote;
-    noteData.tags = ensureTags_(noteData.tags, [TAG_SHEETS_ORIGIN]);
     noteData.version = target.version;
     zoteroPutItemData_(cfg, target.key, noteData);
   } else {
@@ -1405,8 +1688,7 @@ function upsertSheetNotesChild_(cfg, parentKey, plainText) {
     const newNote = {
       itemType: "note",
       parentItem: parentKey,
-      note: htmlNote,
-      tags: [{ tag: READING_LIST_TAG }, { tag: TAG_SHEETS_ORIGIN }]
+      note: htmlNote
     };
 
     const res = UrlFetchApp.fetch(createUrl, {
@@ -1522,6 +1804,7 @@ function showZoteroHelp() {
     <body>
       <div class="wrap">
         <h2>Zotero ↔ Google Sheets Plugin — Help</h2>
+        <p class="hint"><a href="https://www.loom.com/share/39dc7ec5ae504a048e516bc89dd1aa61" target="_blank" rel="noopener">Tutorial here</a></p>
 
         <details open>
           <summary>1) Setting up</summary>
